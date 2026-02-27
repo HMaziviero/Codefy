@@ -1,290 +1,88 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-
 * {
-  margin: 0;
-  padding: 0;
   box-sizing: border-box;
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background-color: #f8fafc;
+  margin: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: radial-gradient(circle at top, #182243 0%, #06070f 60%);
+  color: #f8fafc;
 }
 
-code {
-  font-family: 'Fira Code', source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+.pong-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
+.pong-page h1 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.5rem);
 }
 
-::-webkit-scrollbar-track {
-  background: #f1f5f9;
+.pong-page p {
+  margin: 0;
+  color: #cbd5e1;
 }
 
-::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
+.scoreboard {
+  display: flex;
+  gap: 48px;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  padding: 10px 24px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+.scoreboard div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-/* Smooth transitions for interactive elements */
-button {
-  transition: all 0.2s ease-in-out;
+.scoreboard span {
+  font-size: 0.85rem;
+  color: #94a3b8;
 }
 
-button:hover {
-  transform: translateY(-1px);
+.scoreboard strong {
+  font-size: 2rem;
+  line-height: 1;
 }
 
-button:active {
-  transform: translateY(0);
+.pong-canvas {
+  width: min(900px, 100%);
+  aspect-ratio: 5 / 3;
+  border-radius: 12px;
+  border: 2px solid rgba(148, 163, 184, 0.25);
+  box-shadow: 0 20px 35px rgba(0, 0, 0, 0.45);
 }
 
-/* Card hover effects */
-.card-hover {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+.controls {
+  display: flex;
+  gap: 12px;
 }
 
-.card-hover:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+.controls button {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #e2e8f0;
+  color: #0f172a;
 }
 
-/* Gradient text utilities */
-.gradient-text-purple {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+.controls button:hover {
+  background: #f8fafc;
 }
 
-.gradient-text-blue {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-/* Glass morphism effect */
-.glass {
-  background: rgba(255, 255, 255, 0.25);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-}
-
-/* Floating animation */
-@keyframes float {
-  0%, 100% {
-    transform: translateY(0px);
-  }
-  50% {
-    transform: translateY(-10px);
-  }
-}
-
-.float {
-  animation: float 3s ease-in-out infinite;
-}
-
-/* Pulse animation */
-@keyframes pulse-glow {
-  0%, 100% {
-    box-shadow: 0 0 5px rgba(139, 92, 246, 0.3);
-  }
-  50% {
-    box-shadow: 0 0 20px rgba(139, 92, 246, 0.6);
-  }
-}
-
-.pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
-}
-
-/* Loading shimmer effect */
-@keyframes shimmer {
-  0% {
-    background-position: -200px 0;
-  }
-  100% {
-    background-position: calc(200px + 100%) 0;
-  }
-}
-
-.shimmer {
-  background: linear-gradient(90deg, #f0f0f0 0px, #e0e0e0 40px, #f0f0f0 80px);
-  background-size: 200px;
-  animation: shimmer 1.5s linear infinite;
-}
-
-/* XP Progress bar custom styles */
-.xp-progress {
-  background: linear-gradient(90deg, #8b5cf6, #a855f7, #c084fc);
-  border-radius: 9999px;
-  height: 12px;
-  position: relative;
-  overflow: hidden;
-}
-
-.xp-progress::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
-  animation: shine 2s infinite;
-}
-
-@keyframes shine {
-  0% {
-    left: -100%;
-  }
-  100% {
-    left: 100%;
-  }
-}
-
-/* Badge glow effects */
-.badge-bronze {
-  background: linear-gradient(135deg, #cd7f32, #b8860b);
-  box-shadow: 0 4px 15px rgba(205, 127, 50, 0.3);
-}
-
-.badge-silver {
-  background: linear-gradient(135deg, #c0c0c0, #a9a9a9);
-  box-shadow: 0 4px 15px rgba(192, 192, 192, 0.3);
-}
-
-.badge-gold {
-  background: linear-gradient(135deg, #ffd700, #ffb347);
-  box-shadow: 0 4px 15px rgba(255, 215, 0, 0.4);
-}
-
-.badge-platinum {
-  background: linear-gradient(135deg, #e5e4e2, #b8b8b8);
-  box-shadow: 0 4px 15px rgba(229, 228, 226, 0.4);
-}
-
-/* Leaderboard rank animations */
-.rank-1 {
-  background: linear-gradient(135deg, #ffd700, #ffb347);
-  animation: pulse-gold 2s ease-in-out infinite;
-}
-
-.rank-2 {
-  background: linear-gradient(135deg, #c0c0c0, #a9a9a9);
-}
-
-.rank-3 {
-  background: linear-gradient(135deg, #cd7f32, #b8860b);
-}
-
-@keyframes pulse-gold {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
-  }
-  50% {
-    transform: scale(1.05);
-    box-shadow: 0 0 20px rgba(255, 215, 0, 0.8);
-  }
-}
-
-/* Achievement unlock animation */
-@keyframes achievement-unlock {
-  0% {
-    transform: scale(0) rotate(180deg);
-    opacity: 0;
-  }
-  50% {
-    transform: scale(1.2) rotate(0deg);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1) rotate(0deg);
-    opacity: 1;
-  }
-}
-
-.achievement-unlock {
-  animation: achievement-unlock 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-
-/* Student dashboard specific styles */
-.student-card {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.8));
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  transition: all 0.3s ease;
-}
-
-.student-card:hover {
-  transform: translateY(-5px) scale(1.02);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-}
-
-/* Teacher dashboard professional styles */
-.teacher-card {
-  background: white;
-  border: 1px solid #e2e8f0;
-  transition: all 0.2s ease;
-}
-
-.teacher-card:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-}
-
-/* Responsive design adjustments */
-@media (max-width: 768px) {
-  .card-hover:hover {
-    transform: none;
-  }
-  
-  .student-card:hover {
-    transform: none;
-  }
-}
-
-/* Focus states for accessibility */
-button:focus,
-input:focus,
-textarea:focus,
-select:focus {
-  outline: 2px solid #8b5cf6;
-  outline-offset: 2px;
-}
-
-/* High contrast mode support */
-@media (prefers-contrast: high) {
-  .gradient-text-purple,
-  .gradient-text-blue {
-    -webkit-text-fill-color: initial;
-    background: none;
-    color: #374151;
-  }
-}
-
-/* Reduced motion support */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
+.winner-banner {
+  color: #fef08a;
+  font-weight: 700;
 }
