@@ -1,492 +1,371 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from datetime import datetime, timedelta
 import os
-import logging
-from pathlib import Path
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-import uuid
-from datetime import datetime, timezone, timedelta
-import jwt
-from passlib.context import CryptContext
 import secrets
 import string
+from typing import List, Literal, Optional
 
+import jwt
+import pymysql
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr
+from starlette.middleware.cors import CORSMiddleware
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv()
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-# Security
-SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30 * 24 * 60  # 30 days
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+app = FastAPI(title="Voz de Todos MVP API")
 security = HTTPBearer()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Create the main app
-app = FastAPI(title="Classroom Gamification API")
-
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "trocar-em-producao")
+ALGORITHM = "HS256"
 
 
-# Data Models
-class User(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    username: str
-    email: str
-    name: str
-    role: str  # teacher, student
-    avatar: Optional[str] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class UserCreate(BaseModel):
-    username: str
-    email: str
-    name: str
-    password: str
-    role: str = "student"
-
-class UserLogin(BaseModel):
-    username: str
-    password: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-    user: User
-
-class Classroom(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    title: str
-    description: Optional[str] = None
-    code: str = Field(default_factory=lambda: ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6)))
-    teacher_id: str
-    term: Optional[str] = None
-    grade_level: Optional[str] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class ClassroomCreate(BaseModel):
-    title: str
-    description: Optional[str] = None
-    term: Optional[str] = None
-    grade_level: Optional[str] = None
-
-class Activity(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    class_id: str
-    type: str  # Task, Quiz, Participation, Project, Bonus
-    title: str
-    description: str
-    due_date: Optional[datetime] = None
-    rubric: Dict[str, Any]  # Flexible rubric structure
-    max_xp: int
-    tags: List[str] = []
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class ActivityCreate(BaseModel):
-    type: str
-    title: str
-    description: str
-    due_date: Optional[datetime] = None
-    rubric: Dict[str, Any]
-    max_xp: int
-    tags: List[str] = []
-
-class Submission(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    activity_id: str
-    student_id: str
-    submitted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    score: Optional[float] = None
-    status: str = "submitted"  # submitted, graded, late
-    feedback: Optional[str] = None
-    content: Optional[str] = None
-
-class SubmissionCreate(BaseModel):
-    activity_id: str
-    content: Optional[str] = None
-
-class XPEvent(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str
-    class_id: str
-    activity_id: Optional[str] = None
-    amount: int
-    reason: str
-    source: str  # auto, manual, streak, bonus
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class Badge(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str
-    description: str
-    tier: str  # bronze, silver, gold, platinum
-    icon: str
-    rule: Dict[str, Any]  # Rule for earning the badge
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class UserBadge(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str
-    badge_id: str
-    earned_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class Level(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    level_number: int
-    threshold_xp: int
-    name: str
-    perks: Dict[str, Any] = {}
+def get_connection():
+    return pymysql.connect(
+        host=os.environ.get("MYSQL_HOST", "localhost"),
+        port=int(os.environ.get("MYSQL_PORT", "3306")),
+        user=os.environ.get("MYSQL_USER", "root"),
+        password=os.environ.get("MYSQL_PASSWORD", ""),
+        database=os.environ.get("MYSQL_DB", "voz_de_todos_mvp"),
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True,
+    )
 
 
-# Authentication helpers
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
+def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+def verify_password(password: str, password_hash: str) -> bool:
+    return pwd_context.verify(password, password_hash)
+
+
+def create_access_code(length: int = 6) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def create_token(payload: dict, minutes: int = 24 * 60) -> str:
+    data = payload.copy()
+    data["exp"] = datetime.utcnow() + timedelta(minutes=minutes)
+    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_token(token: str) -> dict:
     try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
-        raise credentials_exception
-    
-    user = await db.users.find_one({"id": user_id})
-    if user is None:
-        raise credentials_exception
-    return User(**user)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido")
 
 
-# Auth endpoints
-@api_router.post("/auth/register", response_model=Token)
-async def register(user_data: UserCreate):
-    # Check if user exists
-    existing_user = await db.users.find_one({"$or": [{"username": user_data.username}, {"email": user_data.email}]})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Username or email already registered")
-    
-    # Create user
-    hashed_password = get_password_hash(user_data.password)
-    user_dict = user_data.dict()
-    user_dict.pop('password')
-    user = User(**user_dict)
-    
-    # Store in DB
-    user_doc = user.dict()
-    user_doc['hashed_password'] = hashed_password
-    await db.users.insert_one(user_doc)
-    
-    # Create token
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.id}, expires_delta=access_token_expires
+class ProfessorCadastro(BaseModel):
+    nome: str
+    email: EmailStr
+    senha: str
+
+
+class ProfessorLogin(BaseModel):
+    email: EmailStr
+    senha: str
+
+
+class SessaoCreate(BaseModel):
+    titulo: Optional[str] = None
+
+
+class PerguntaCreate(BaseModel):
+    tipo: Literal["ABERTA", "MULTIPLA_ESCOLHA"]
+    enunciado: str
+    alternativas: Optional[List[str]] = None
+
+
+class EntrarSessao(BaseModel):
+    nome: str
+
+
+class RespostaCreate(BaseModel):
+    alternativa_id: Optional[int] = None
+    texto_livre: Optional[str] = None
+
+
+async def professor_autenticado(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    payload = decode_token(credentials.credentials)
+    if payload.get("tipo") != "professor":
+        raise HTTPException(status_code=401, detail="Acesso somente para professor")
+    return payload
+
+
+async def participante_autenticado(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    payload = decode_token(credentials.credentials)
+    if payload.get("tipo") != "participante":
+        raise HTTPException(status_code=401, detail="Acesso somente para participante")
+    return payload
+
+
+@app.post("/api/professores/cadastro")
+async def cadastro_professor(data: ProfessorCadastro):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM professor WHERE email=%s", (data.email,))
+            if cur.fetchone():
+                raise HTTPException(status_code=400, detail="Email já cadastrado")
+
+            cur.execute(
+                "INSERT INTO professor (nome, email, senha_hash) VALUES (%s, %s, %s)",
+                (data.nome, data.email, hash_password(data.senha)),
+            )
+            professor_id = cur.lastrowid
+
+    token = create_token({"tipo": "professor", "professor_id": professor_id})
+    return {"token": token, "professor_id": professor_id, "nome": data.nome}
+
+
+@app.post("/api/professores/login")
+async def login_professor(data: ProfessorLogin):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, nome, senha_hash FROM professor WHERE email=%s", (data.email,))
+            professor = cur.fetchone()
+
+    if not professor or not verify_password(data.senha, professor["senha_hash"]):
+        raise HTTPException(status_code=401, detail="Credenciais inválidas")
+
+    token = create_token({"tipo": "professor", "professor_id": professor["id"]})
+    return {"token": token, "professor_id": professor["id"], "nome": professor["nome"]}
+
+
+@app.get("/api/professores/me")
+async def professor_me(payload: dict = Depends(professor_autenticado)):
+    return payload
+
+
+@app.post("/api/sessoes")
+async def criar_sessao(data: SessaoCreate, payload: dict = Depends(professor_autenticado)):
+    professor_id = payload["professor_id"]
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            codigo = create_access_code()
+            while True:
+                cur.execute("SELECT id FROM sessao WHERE codigo_acesso=%s", (codigo,))
+                if not cur.fetchone():
+                    break
+                codigo = create_access_code()
+
+            cur.execute(
+                "INSERT INTO sessao (professor_id, titulo, codigo_acesso, status) VALUES (%s, %s, %s, 'ABERTA')",
+                (professor_id, data.titulo, codigo),
+            )
+            sessao_id = cur.lastrowid
+
+    return {"id": sessao_id, "codigo_acesso": codigo, "titulo": data.titulo, "status": "ABERTA"}
+
+
+@app.get("/api/sessoes/aberta")
+async def sessao_aberta(payload: dict = Depends(professor_autenticado)):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, titulo, codigo_acesso, status, criada_em
+                FROM sessao
+                WHERE professor_id=%s AND status='ABERTA'
+                ORDER BY criada_em DESC
+                LIMIT 1
+                """,
+                (payload["professor_id"],),
+            )
+            sessao = cur.fetchone()
+            if not sessao:
+                raise HTTPException(status_code=404, detail="Nenhuma sessão aberta")
+    return sessao
+
+
+@app.post("/api/sessoes/{codigo_acesso}/entrar")
+async def entrar_sessao(codigo_acesso: str, data: EntrarSessao):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM sessao WHERE codigo_acesso=%s AND status='ABERTA'",
+                (codigo_acesso,),
+            )
+            sessao = cur.fetchone()
+            if not sessao:
+                raise HTTPException(status_code=404, detail="Sessão não encontrada")
+
+            cur.execute(
+                "INSERT INTO participante (sessao_id, nome) VALUES (%s, %s)",
+                (sessao["id"], data.nome),
+            )
+            participante_id = cur.lastrowid
+
+    token = create_token(
+        {
+            "tipo": "participante",
+            "participante_id": participante_id,
+            "sessao_id": sessao["id"],
+            "codigo_acesso": codigo_acesso,
+            "nome": data.nome,
+        },
+        minutes=8 * 60,
     )
-    
-    return Token(access_token=access_token, token_type="bearer", user=user)
-
-@api_router.post("/auth/login", response_model=Token)
-async def login(user_data: UserLogin):
-    user = await db.users.find_one({"username": user_data.username})
-    if not user or not verify_password(user_data.password, user['hashed_password']):
-        raise HTTPException(status_code=400, detail="Incorrect username or password")
-    
-    user_obj = User(**user)
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user_obj.id}, expires_delta=access_token_expires
-    )
-    
-    return Token(access_token=access_token, token_type="bearer", user=user_obj)
-
-@api_router.get("/auth/me", response_model=User)
-async def get_me(current_user: User = Depends(get_current_user)):
-    return current_user
+    return {"token": token, "participante_id": participante_id, "sessao_id": sessao["id"]}
 
 
-# Classroom endpoints
-@api_router.post("/classrooms", response_model=Classroom)
-async def create_classroom(classroom_data: ClassroomCreate, current_user: User = Depends(get_current_user)):
-    if current_user.role != "teacher":
-        raise HTTPException(status_code=403, detail="Only teachers can create classrooms")
-    
-    classroom = Classroom(**classroom_data.dict(), teacher_id=current_user.id)
-    await db.classrooms.insert_one(classroom.dict())
-    return classroom
+@app.post("/api/sessoes/{sessao_id}/perguntas")
+async def criar_pergunta(sessao_id: int, data: PerguntaCreate, payload: dict = Depends(professor_autenticado)):
+    if data.tipo == "MULTIPLA_ESCOLHA" and (not data.alternativas or len(data.alternativas) < 2):
+        raise HTTPException(status_code=400, detail="Pergunta de múltipla escolha precisa de pelo menos 2 alternativas")
 
-@api_router.get("/classrooms", response_model=List[Classroom])
-async def get_classrooms(current_user: User = Depends(get_current_user)):
-    if current_user.role == "teacher":
-        classrooms = await db.classrooms.find({"teacher_id": current_user.id}).to_list(100)
-    else:
-        # Get enrolled classrooms for students
-        enrollments = await db.enrollments.find({"user_id": current_user.id}).to_list(100)
-        class_ids = [e["class_id"] for e in enrollments]
-        classrooms = await db.classrooms.find({"id": {"$in": class_ids}}).to_list(100)
-    
-    return [Classroom(**c) for c in classrooms]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM sessao WHERE id=%s AND professor_id=%s AND status='ABERTA'",
+                (sessao_id, payload["professor_id"]),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=403, detail="Sessão inválida")
 
-@api_router.post("/classrooms/{class_code}/join")
-async def join_classroom(class_code: str, current_user: User = Depends(get_current_user)):
-    if current_user.role != "student":
-        raise HTTPException(status_code=403, detail="Only students can join classrooms")
-    
-    classroom = await db.classrooms.find_one({"code": class_code})
-    if not classroom:
-        raise HTTPException(status_code=404, detail="Classroom not found")
-    
-    # Check if already enrolled
-    existing_enrollment = await db.enrollments.find_one({"class_id": classroom["id"], "user_id": current_user.id})
-    if existing_enrollment:
-        raise HTTPException(status_code=400, detail="Already enrolled in this classroom")
-    
-    # Create enrollment
-    enrollment = {
-        "id": str(uuid.uuid4()),
-        "class_id": classroom["id"],
-        "user_id": current_user.id,
-        "status": "active",
-        "enrolled_at": datetime.now(timezone.utc)
-    }
-    await db.enrollments.insert_one(enrollment)
-    
-    return {"message": "Successfully joined classroom", "classroom": Classroom(**classroom)}
+            cur.execute("UPDATE pergunta SET encerrada_em=NOW() WHERE sessao_id=%s AND encerrada_em IS NULL", (sessao_id,))
+            cur.execute(
+                "INSERT INTO pergunta (sessao_id, tipo, enunciado) VALUES (%s, %s, %s)",
+                (sessao_id, data.tipo, data.enunciado),
+            )
+            pergunta_id = cur.lastrowid
+
+            if data.tipo == "MULTIPLA_ESCOLHA":
+                for idx, alt in enumerate(data.alternativas or [], start=1):
+                    cur.execute(
+                        "INSERT INTO alternativa (pergunta_id, ordem, texto) VALUES (%s, %s, %s)",
+                        (pergunta_id, idx, alt.strip()),
+                    )
+
+    return {"id": pergunta_id}
 
 
-# Activity endpoints
-@api_router.post("/classrooms/{class_id}/activities", response_model=Activity)
-async def create_activity(class_id: str, activity_data: ActivityCreate, current_user: User = Depends(get_current_user)):
-    # Verify teacher owns the classroom
-    classroom = await db.classrooms.find_one({"id": class_id, "teacher_id": current_user.id})
-    if not classroom:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    activity = Activity(**activity_data.dict(), class_id=class_id)
-    await db.activities.insert_one(activity.dict())
-    return activity
+@app.get("/api/sessoes/{codigo_acesso}/pergunta-atual")
+async def pergunta_atual(codigo_acesso: str):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM sessao WHERE codigo_acesso=%s AND status='ABERTA'", (codigo_acesso,))
+            sessao = cur.fetchone()
+            if not sessao:
+                raise HTTPException(status_code=404, detail="Sessão não encontrada")
 
-@api_router.get("/classrooms/{class_id}/activities", response_model=List[Activity])
-async def get_activities(class_id: str, current_user: User = Depends(get_current_user)):
-    # Verify access to classroom
-    if current_user.role == "teacher":
-        classroom = await db.classrooms.find_one({"id": class_id, "teacher_id": current_user.id})
-    else:
-        enrollment = await db.enrollments.find_one({"class_id": class_id, "user_id": current_user.id})
-        classroom = enrollment is not None
-    
-    if not classroom:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    activities = await db.activities.find({"class_id": class_id}).to_list(100)
-    return [Activity(**a) for a in activities]
+            cur.execute(
+                """
+                SELECT id, sessao_id, tipo, enunciado, criada_em
+                FROM pergunta
+                WHERE sessao_id=%s AND encerrada_em IS NULL
+                ORDER BY criada_em DESC
+                LIMIT 1
+                """,
+                (sessao["id"],),
+            )
+            pergunta = cur.fetchone()
+            if not pergunta:
+                return {"pergunta": None}
 
+            alternativas = []
+            if pergunta["tipo"] == "MULTIPLA_ESCOLHA":
+                cur.execute(
+                    "SELECT id, ordem, texto FROM alternativa WHERE pergunta_id=%s ORDER BY ordem ASC",
+                    (pergunta["id"],),
+                )
+                alternativas = cur.fetchall()
 
-# Student submission endpoints
-@api_router.post("/submissions", response_model=Submission)
-async def submit_activity(submission_data: SubmissionCreate, current_user: User = Depends(get_current_user)):
-    if current_user.role != "student":
-        raise HTTPException(status_code=403, detail="Only students can submit activities")
-    
-    # Verify student is enrolled in the class
-    activity = await db.activities.find_one({"id": submission_data.activity_id})
-    if not activity:
-        raise HTTPException(status_code=404, detail="Activity not found")
-    
-    enrollment = await db.enrollments.find_one({"class_id": activity["class_id"], "user_id": current_user.id})
-    if not enrollment:
-        raise HTTPException(status_code=403, detail="Not enrolled in this class")
-    
-    # Check if already submitted
-    existing_submission = await db.submissions.find_one({"activity_id": submission_data.activity_id, "student_id": current_user.id})
-    if existing_submission:
-        raise HTTPException(status_code=400, detail="Already submitted")
-    
-    submission = Submission(**submission_data.dict(), student_id=current_user.id)
-    await db.submissions.insert_one(submission.dict())
-    
-    # Award XP automatically (basic implementation)
-    await award_xp_for_submission(current_user.id, activity, submission)
-    
-    return submission
-
-async def award_xp_for_submission(student_id: str, activity: dict, submission: Submission):
-    """Award XP based on completion and timing"""
-    base_xp = activity['max_xp'] // 2  # Base XP for completion
-    
-    # Check if on time
-    if activity.get('due_date'):
-        due_date = activity['due_date']
-        # Handle both string and datetime objects
-        if isinstance(due_date, str):
-            due_date = datetime.fromisoformat(due_date.replace('Z', '+00:00'))
-        elif isinstance(due_date, datetime):
-            # Ensure timezone awareness
-            if due_date.tzinfo is None:
-                due_date = due_date.replace(tzinfo=timezone.utc)
-        else:
-            # Fallback - give full XP if we can't parse due date
-            base_xp = activity['max_xp']
-            due_date = None
-            
-        # Ensure submission time is timezone-aware
-        submitted_at = submission.submitted_at
-        if submitted_at.tzinfo is None:
-            submitted_at = submitted_at.replace(tzinfo=timezone.utc)
-            
-        if due_date and submitted_at <= due_date:
-            base_xp = activity['max_xp']  # Full XP for on-time submission
-    
-    xp_event = XPEvent(
-        user_id=student_id,
-        class_id=activity['class_id'],
-        activity_id=activity['id'],
-        amount=base_xp,
-        reason=f"Completed activity: {activity['title']}",
-        source="auto"
-    )
-    
-    await db.xp_events.insert_one(xp_event.dict())
+    return {"pergunta": pergunta, "alternativas": alternativas}
 
 
-# XP and progress endpoints
-@api_router.get("/students/{student_id}/xp/{class_id}")
-async def get_student_xp(student_id: str, class_id: str, current_user: User = Depends(get_current_user)):
-    if current_user.role == "student" and current_user.id != student_id:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    xp_events = await db.xp_events.find({"user_id": student_id, "class_id": class_id}).to_list(1000)
-    total_xp = sum(event['amount'] for event in xp_events)
-    
-    return {
-        "student_id": student_id,
-        "class_id": class_id,
-        "total_xp": total_xp,
-        "events": [XPEvent(**event) for event in xp_events]
-    }
+@app.post("/api/perguntas/{pergunta_id}/responder")
+async def responder_pergunta(
+    pergunta_id: int,
+    data: RespostaCreate,
+    payload: dict = Depends(participante_autenticado),
+):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, tipo FROM pergunta WHERE id=%s AND sessao_id=%s AND encerrada_em IS NULL",
+                (pergunta_id, payload["sessao_id"]),
+            )
+            pergunta = cur.fetchone()
+            if not pergunta:
+                raise HTTPException(status_code=404, detail="Pergunta não encontrada ou encerrada")
 
-@api_router.get("/classrooms/{class_id}/leaderboard")
-async def get_leaderboard(class_id: str, current_user: User = Depends(get_current_user)):
-    # Get all students in the class
-    enrollments = await db.enrollments.find({"class_id": class_id}).to_list(1000)
-    student_ids = [e["user_id"] for e in enrollments]
-    
-    # Calculate XP for each student
-    leaderboard = []
-    for student_id in student_ids:
-        xp_events = await db.xp_events.find({"user_id": student_id, "class_id": class_id}).to_list(1000)
-        total_xp = sum(event['amount'] for event in xp_events)
-        
-        student = await db.users.find_one({"id": student_id})
-        leaderboard.append({
-            "student": User(**student),
-            "total_xp": total_xp
-        })
-    
-    # Sort by XP descending
-    leaderboard.sort(key=lambda x: x['total_xp'], reverse=True)
-    
-    return leaderboard
+            alternativa_id = data.alternativa_id
+            texto_livre = (data.texto_livre or "").strip() or None
+
+            if pergunta["tipo"] == "ABERTA" and not texto_livre:
+                raise HTTPException(status_code=400, detail="Resposta aberta obrigatória")
+            if pergunta["tipo"] == "MULTIPLA_ESCOLHA" and not alternativa_id:
+                raise HTTPException(status_code=400, detail="Alternativa obrigatória")
+
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO resposta (pergunta_id, participante_id, alternativa_id, texto_livre)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (pergunta_id, payload["participante_id"], alternativa_id, texto_livre),
+                )
+            except pymysql.err.IntegrityError:
+                raise HTTPException(status_code=409, detail="Você já respondeu essa pergunta")
+
+    return {"ok": True}
 
 
-# Initialize default badges and levels
-@api_router.post("/admin/init-defaults")
-async def initialize_defaults(current_user: User = Depends(get_current_user)):
-    if current_user.role != "teacher":
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    # Create default badges
-    default_badges = [
-        Badge(
-            name="First Steps",
-            description="Complete your first activity",
-            tier="bronze",
-            icon="🎯",
-            rule={"type": "activity_count", "threshold": 1}
-        ),
-        Badge(
-            name="On-Time Hero",
-            description="Submit 5 activities on time",
-            tier="silver",
-            icon="⏰",
-            rule={"type": "on_time_submissions", "threshold": 5}
-        ),
-        Badge(
-            name="High Achiever",
-            description="Score 90% or higher on 3 activities",
-            tier="gold",
-            icon="🏆",
-            rule={"type": "high_scores", "threshold": 3, "score_requirement": 90}
-        )
-    ]
-    
-    for badge in default_badges:
-        existing = await db.badges.find_one({"name": badge.name})
-        if not existing:
-            await db.badges.insert_one(badge.dict())
-    
-    # Create default levels
-    default_levels = [
-        Level(level_number=1, threshold_xp=0, name="Beginner"),
-        Level(level_number=2, threshold_xp=100, name="Explorer"),
-        Level(level_number=3, threshold_xp=250, name="Adventurer"),
-        Level(level_number=4, threshold_xp=500, name="Expert"),
-        Level(level_number=5, threshold_xp=1000, name="Master"),
-    ]
-    
-    for level in default_levels:
-        existing = await db.levels.find_one({"level_number": level.level_number})
-        if not existing:
-            await db.levels.insert_one(level.dict())
-    
-    return {"message": "Default badges and levels initialized"}
+@app.get("/api/perguntas/{pergunta_id}/resultados")
+async def resultados(pergunta_id: int, payload: dict = Depends(professor_autenticado)):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT p.id, p.tipo, p.enunciado
+                FROM pergunta p
+                JOIN sessao s ON s.id = p.sessao_id
+                WHERE p.id=%s AND s.professor_id=%s
+                """,
+                (pergunta_id, payload["professor_id"]),
+            )
+            pergunta = cur.fetchone()
+            if not pergunta:
+                raise HTTPException(status_code=404, detail="Pergunta não encontrada")
 
+            if pergunta["tipo"] == "MULTIPLA_ESCOLHA":
+                cur.execute(
+                    """
+                    SELECT a.id AS alternativa_id, a.ordem, a.texto, COUNT(r.id) AS votos
+                    FROM alternativa a
+                    LEFT JOIN resposta r ON r.alternativa_id=a.id
+                    WHERE a.pergunta_id=%s
+                    GROUP BY a.id, a.ordem, a.texto
+                    ORDER BY a.ordem ASC
+                    """,
+                    (pergunta_id,),
+                )
+                return {"tipo": "MULTIPLA_ESCOLHA", "enunciado": pergunta["enunciado"], "opcoes": cur.fetchall()}
 
-# Include the router in the main app
-app.include_router(api_router)
+            cur.execute(
+                """
+                SELECT pa.nome AS aluno_nome, r.texto_livre, r.respondida_em
+                FROM resposta r
+                JOIN participante pa ON pa.id=r.participante_id
+                WHERE r.pergunta_id=%s
+                ORDER BY r.respondida_em DESC
+                """,
+                (pergunta_id,),
+            )
+            return {"tipo": "ABERTA", "enunciado": pergunta["enunciado"], "respostas": cur.fetchall()}
+
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
